@@ -5,6 +5,7 @@ A simple backend connector to GitHub that authenticates via Personal Access Toke
 ## Features
 
 - Secure token handling via environment variables (`GITHUB_TOKEN`)
+- Optional OAuth 2.0 flow for obtaining GitHub access tokens
 - Real GitHub API integration using authenticated HTTP requests
 - Endpoints to:
   - Fetch repositories (`/repos`)
@@ -42,6 +43,17 @@ Or create a `.env` file:
 
 ```env
 GITHUB_TOKEN=your_token_here
+
+# Optional OAuth (bonus)
+GITHUB_CLIENT_ID=Ov23liDnMbBT6vkt5ZCn
+GITHUB_CLIENT_SECRET=your_secret_here
+GITHUB_REDIRECT_URI=http://localhost:8000/auth/github/callback
+```
+
+Or copy the demo template:
+
+```bash
+cp .env.example .env
 ```
 
 ## Run
@@ -61,6 +73,7 @@ Open docs at: `http://127.0.0.1:8000/docs`
 `GET /repos?user_or_org=<name>&kind=user`
 
 - `kind`: `user` or `org`
+- `token` (optional): use `?token=<oauth_or_pat_token>` to override `GITHUB_TOKEN`
 
 Example:
 
@@ -72,6 +85,7 @@ curl "http://127.0.0.1:8000/repos?user_or_org=octocat&kind=user"
 `GET /list-issues?owner=<owner>&repo=<repo>&state=open`
 
 - `state`: `open`, `closed`, `all`
+- `token` (optional): use `?token=<oauth_or_pat_token>`
 
 Example:
 
@@ -81,6 +95,9 @@ curl "http://127.0.0.1:8000/list-issues?owner=octocat&repo=Hello-World&state=ope
 
 ### 4) Create an issue
 `POST /create-issue`
+
+Query parameter:
+- `token` (optional): use `?token=<oauth_or_pat_token>`
 
 Request body:
 
@@ -104,10 +121,30 @@ curl -X POST "http://127.0.0.1:8000/create-issue" \
 ### 5) Fetch commits from a repository
 `GET /commits?owner=<owner>&repo=<repo>&per_page=10`
 
+- `token` (optional): use `?token=<oauth_or_pat_token>`
+
 Example:
 
 ```bash
 curl "http://127.0.0.1:8000/commits?owner=octocat&repo=Hello-World&per_page=5"
+```
+
+### 6) OAuth login URL (bonus)
+`GET /auth/github/login`
+
+Returns an `authorize_url` and `state`.
+
+If `GITHUB_CLIENT_ID`/`GITHUB_REDIRECT_URI` are not set, the app falls back to demo defaults:
+- `GITHUB_CLIENT_ID=Ov23liDnMbBT6vkt5ZCn`
+- `GITHUB_REDIRECT_URI=http://localhost:8000/auth/github/callback`
+
+### 7) OAuth callback (bonus)
+`GET /auth/github/callback?code=<github_code>&state=<state>`
+
+Returns GitHub access token payload. Use that token with connector endpoints:
+
+```bash
+curl "http://127.0.0.1:8000/repos?user_or_org=octocat&kind=user&token=<access_token>"
 ```
 
 ## Error handling

@@ -1,6 +1,7 @@
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app
@@ -16,11 +17,17 @@ def test_health_endpoint() -> None:
 
 def test_get_auth_headers_requires_token() -> None:
     with patch.dict(os.environ, {}, clear=True):
-        try:
+        try:  # pragma: no branch
             app._get_auth_headers()
             raise AssertionError("Expected HTTPException")
-        except Exception as exc:
-            assert getattr(exc, "status_code", None) == 500
+        except HTTPException as exc:
+            assert exc.status_code == 500
+
+
+def test_get_auth_headers_uses_explicit_token() -> None:
+    with patch.dict(os.environ, {}, clear=True):
+        headers = app._get_auth_headers(token="oauth-token")
+    assert headers["Authorization"] == "Bearer oauth-token"
 
 
 def test_list_repos_for_user() -> None:
@@ -40,7 +47,7 @@ def test_list_repos_for_user() -> None:
     body = response.json()
     assert body["count"] == 1
     assert body["repositories"][0]["full_name"] == "octocat/repo1"
-    mock_request.assert_awaited_once_with("GET", "/users/octocat/repos")
+    mock_request.assert_awaited_once_with("GET", "/users/octocat/repos", token=None)
 
 
 def test_list_issues_filters_pull_requests() -> None:
@@ -95,6 +102,7 @@ def test_create_issue() -> None:
         "POST",
         "/repos/octocat/Hello-World/issues",
         json={"title": "Created via API", "body": "Body"},
+        token=None,
     )
 
 
@@ -119,6 +127,7 @@ def test_list_commits() -> None:
         "GET",
         "/repos/octocat/Hello-World/commits",
         params={"per_page": 1},
+        token=None,
     )
 
 
@@ -182,3 +191,63 @@ def test_end_to_end_connector_flow_with_mocked_github() -> None:
     assert issues_res.json()["issues"][0]["number"] == 1
     assert create_res.json()["number"] == 2
     assert commits_res.json()["commits"][0]["sha"] == "def456"
+
+
+def test_github_oauth_login_uses_demo_defaults() -> None:
+    with patch.dict(os.environ, {}, clear=True):
+        response = client.get("/auth/github/login")
+    assert response.status_code == 200
+    body = response.json()
+    assert "Ov23liDnMbBT6vkt5ZCn" in body["authorize_url"]
+    assert "http://localhost:8000/auth/github/callback" in body["authorize_url"]
+
+
+def test_github_oauth_login_success() -> None:
+    with patch.dict(
+        os.environ,
+        {"GITHUB_CLIENT_ID": "cid", "GITHUB_REDIRECT_URI": "http://localhost:8000/auth/github/callback"},
+        clear=True,
+    ):
+        response = client.get("/auth/github/login")
+    assert response.status_code == 200
+    body = response.json()
+    assert "authorize_url" in body
+    assert "state=" in body["authorize_url"]
+    assert body["state"]
+
+
+def test_github_oauth_callback_invalid_state() -> None:
+    response = client.get("/auth/github/callback", params={"code": "abc", "state": "not-valid"})
+    assert response.status_code == 400
+
+
+def test_github_oauth_callback_success() -> None:
+    app.oauth_state_store["state-ok"] = True
+
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "access_token": "oauth-access-token",
+        "token_type": "bearer",
+        "scope": "repo",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.post.return_value = mock_response
+
+    with patch.dict(
+        os.environ,
+        {
+            "GITHUB_CLIENT_ID": "cid",
+            "GITHUB_CLIENT_SECRET": "csecret",
+            "GITHUB_REDIRECT_URI": "http://localhost:8000/auth/github/callback",
+        },
+        clear=True,
+    ):
+        with patch("app.httpx.AsyncClient", return_value=mock_client):
+            response = client.get("/auth/github/callback", params={"code": "abc", "state": "state-ok"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["access_token"] == "oauth-access-token"
